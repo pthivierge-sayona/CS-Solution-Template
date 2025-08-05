@@ -20,22 +20,31 @@ using System.Linq;
 using System.Reflection;
 using System.ServiceProcess;
 using System.Windows.Forms;
-using log4net;
-using log4net.Appender;
-using log4net.Repository.Hierarchy;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using NewApp.Core.Helpers;
 
 namespace NewApp.Settings.GUI
 {
     public partial class ServiceManager : Form
     {
-        private readonly ILog _logger = LogManager.GetLogger(typeof (ServiceManager));
+        private readonly ILogger<ServiceManager> _logger;
+        private readonly IConfiguration _configuration;
         private XmlSettingsManager _currentSetting;
 
-        public ServiceManager()
-        {
-            InitializeComponent();
-        }
+        public ServiceManager(ILogger<ServiceManager> logger, IConfiguration configuration)
+    {
+        _logger = logger;
+        _configuration = configuration;
+        InitializeComponent();
+    }
+
+    // Parameterless constructor for designer support
+    public ServiceManager() : this(null!, null!)
+    {
+        // This constructor should only be used by the designer
+        // In runtime, use the DI constructor
+    }
 
         private void InitTreeView()
         {
@@ -55,8 +64,8 @@ namespace NewApp.Settings.GUI
                 settingsCommentsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, settingsCommentsPath);
 
 
-            _logger.Debug("will try to load service settings file: " + appSettingsPath);
-            _logger.Debug("will try to load comments file: " + settingsCommentsPath);
+            _logger?.LogDebug("Will try to load service settings file: {AppSettingsPath}", appSettingsPath);
+            _logger?.LogDebug("Will try to load comments file: {SettingsCommentsPath}", settingsCommentsPath);
 
             // here is the place you have to add your setting files
             setting = new XmlSettingsManager(typeof (General).FullName, appSettingsPath, settingsCommentsPath);
@@ -79,7 +88,7 @@ namespace NewApp.Settings.GUI
         {
             try
             {
-                _logger.Debug("Application Started.");
+                _logger?.LogDebug("Application Started.");
                 serviceController1.ServiceName = Settings.Default.ServiceName;
                 serviceController1.MachineName = System.Environment.MachineName;
                 Init();
@@ -87,7 +96,7 @@ namespace NewApp.Settings.GUI
             }
             catch (Exception ex)
             {
-                _logger.Error(ex);
+                _logger?.LogError(ex, "Error during application startup");
             }
         }
 
@@ -120,7 +129,7 @@ namespace NewApp.Settings.GUI
             {
                 lblServiceState.Text = "Error while looking for service.";
                 btnServiceAction.Enabled = false;
-                //_logger.Error(ex); // this would fill up logs... 
+                //_logger?.LogError(ex, "Timer tick error"); // this would fill up logs... 
             }
         }
 
@@ -170,7 +179,7 @@ namespace NewApp.Settings.GUI
 
         private void Init()
         {
-            _logger.Debug("Initializing application.");
+            _logger?.LogDebug("Initializing application.");
             InitTreeView();
 
             // ajoute un tooltip au bouton save
@@ -198,7 +207,7 @@ namespace NewApp.Settings.GUI
             notifyIcon1.Text = "NewApp Service Configurator";
 
 
-            _logger.Debug("Initialization completed.");
+            _logger?.LogDebug("Initialization completed.");
         }
 
         private void openContainingFolderToolStripMenuItem1_Click(object sender, EventArgs e)
@@ -210,19 +219,23 @@ namespace NewApp.Settings.GUI
         {
             try
             {
-                FileAppender rootAppender =
-                    ((Hierarchy) LogManager.GetRepository()).Root.Appenders.OfType<FileAppender>().FirstOrDefault();
-                string GUILogFile = rootAppender != null ? rootAppender.File : string.Empty;
-                string serviceLogFile = Path.Combine(Path.GetDirectoryName(GUILogFile),
-                    Settings.Default.ServiceLogFileNameForLogViewer);
+                // For Serilog file logging, construct the log file path based on configuration
+                var logsDirectory = Path.Combine(Directory.GetCurrentDirectory(), "Logs");
+                var guiLogFile = Path.Combine(logsDirectory, $"NewAppUI-{DateTime.Now:yyyyMMdd}.log");
+                
+                var serviceLogFileName = _configuration?["AppSettings:ServiceLogFileNameForLogViewer"] ?? "NewAppService.log";
+                var serviceLogFile = Path.Combine(logsDirectory, serviceLogFileName);
 
-                if (!string.IsNullOrEmpty(GUILogFile))
+                // Use the configured log viewer executable
+                var logViewerExe = _configuration?["AppSettings:LogViewerExe"] ?? "baretail.exe";
+
+                if (File.Exists(guiLogFile) || File.Exists(serviceLogFile))
                 {
                     // Prepare the process to run
                     var processStartInfo = new ProcessStartInfo
                     {
-                        Arguments = serviceLogFile.PutIntoQuotes() + " " + GUILogFile.PutIntoQuotes(),
-                        FileName = Path.Combine(Directory.GetCurrentDirectory(), Settings.Default.LogViewerExe),
+                        Arguments = serviceLogFile.PutIntoQuotes() + " " + guiLogFile.PutIntoQuotes(),
+                        FileName = Path.Combine(Directory.GetCurrentDirectory(), logViewerExe),
                         WindowStyle = ProcessWindowStyle.Normal,
                         CreateNoWindow = false
                     };
@@ -237,7 +250,7 @@ namespace NewApp.Settings.GUI
             {
                 MessageBox.Show("An error occured: " + ex.Message + "\n See log file for more informations", "error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
-                _logger.Error(ex);
+                _logger?.LogError(ex, "Error in log viewer operation");
             }
         }
 

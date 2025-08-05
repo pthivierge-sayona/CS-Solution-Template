@@ -13,65 +13,94 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 #endregion
-using System;
-using System.IO;
+
 using CommandLine;
-using CommandLine.Text;
-using log4net;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Serilog;
 using NewApp.Core.Helpers;
 
-namespace NewApp.CommandLine
+namespace NewApp.CommandLine;
+
+/// <summary>
+///     Command line program "Main"
+///     Uses modern .NET hosting and Serilog for logging
+/// </summary>
+internal class Program
 {
-    /// <summary>
-    ///     Command line program "Main"
-    ///     logs are both sent to the log file and in the console
-    ///     This can be configured in CommandLine.Log4Net.cfg
-    /// </summary>
-    internal class Program
+    private static async Task<int> Main(string[] args)
     {
+        // Create configuration
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .Build();
 
-        static ILog _logger = LogManager.GetLogger(typeof(Program));
+        // Configure Serilog
+        Log.Logger = new LoggerConfiguration()
+            .ReadFrom.Configuration(configuration)
+            .CreateLogger();
 
-        private static void Main(string[] args)
+        try
         {
-           
-            TextWriter writer = Console.Out;
+            Log.Information("Application starting up");
+
+            // Build and configure command line parser instance
+            var parserResult = Parser.Default.ParseArguments<CommandLineOptions>(args);
             
-            try
-            {
-
-                // build and configure command line parser instance
-                var parser = Parser.Default;
-                
-                var parserResults = Parser.Default.ParseArguments<CommandLineOptions>(args)
-                    .WithParsed(opts => RunOptions(opts))
-                    .WithNotParsed(errs =>
-                    {
-                        Environment.Exit(1);
-                    });
-
-                Environment.Exit(0);
-            }
-
-
-            catch (Exception ex)
-            {
-                Console.SetOut(writer);
-                Console.WriteLine("Error: " + ex);                
-            }
+            return await parserResult.MapResult(
+                async (CommandLineOptions opts) => await RunOptionsAsync(opts, configuration),
+                async errors => await HandleParseErrorAsync(errors)
+            );
         }
-
-        private static void RunOptions(CommandLineOptions opts)
+        catch (Exception ex)
         {
-
-                _logger.Info("Command Line Started"); // you could delete this line ... 
-
-                // your code here
-                Console.Write("Program running, press key to stop");
-
-                Console.ReadKey();
-
+            Log.Fatal(ex, "Application terminated unexpectedly");
+            return 1;
         }
+        finally
+        {
+            await Log.CloseAndFlushAsync();
+        }
+    }
 
+    private static async Task<int> RunOptionsAsync(CommandLineOptions opts, IConfiguration configuration)
+    {
+        try
+        {
+            Log.Information("Command Line Started");
+            
+            // Create host builder for dependency injection
+            var host = Host.CreateDefaultBuilder()
+                .UseSerilog()
+                .ConfigureServices((context, services) =>
+                {
+                    services.AddSingleton(opts);
+                    // Add your services here
+                })
+                .Build();
+
+            using (host)
+            {
+                // Your code here
+                Console.WriteLine("Program running, press any key to stop");
+                Console.ReadKey();
+                
+                Log.Information("Command Line Completed Successfully");
+                return 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "An error occurred while running the command line application");
+            return 1;
+        }
+    }
+
+    private static async Task<int> HandleParseErrorAsync(IEnumerable<Error> errors)
+    {
+        Log.Error("Command line parsing failed: {Errors}", string.Join(", ", errors.Select(e => e.ToString())));
+        return 1;
     }
 }

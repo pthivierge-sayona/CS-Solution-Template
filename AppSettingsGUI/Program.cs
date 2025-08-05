@@ -13,22 +13,74 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 #endregion
-using System;
-using System.Windows.Forms;
 
-namespace NewApp.Settings.GUI
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Serilog;
+
+namespace NewApp.Settings.GUI;
+
+internal static class Program
 {
-    internal static class Program
+    /// <summary>
+    ///     Main entry point for the Windows Forms application
+    /// </summary>
+    [STAThread]
+    private static void Main()
     {
-        /// <summary>
-        ///     Main entry point
-        /// </summary>
-        [STAThread]
-        private static void Main()
+        // Create configuration
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .Build();
+
+        // Configure Serilog
+        Log.Logger = new LoggerConfiguration()
+            .ReadFrom.Configuration(configuration)
+            .CreateLogger();
+
+        try
         {
+            Log.Information("Starting Settings GUI application");
+
+            // Enable modern visual styles
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new ServiceManager());
+
+            // Create a host for dependency injection
+            var host = Host.CreateDefaultBuilder()
+                .UseSerilog()
+                .ConfigureServices((context, services) =>
+                {
+                    // Register configuration
+                    services.AddSingleton(configuration);
+                    
+                    // Register forms
+                    services.AddTransient<ServiceManager>();
+                    
+                    // Add other services as needed
+                })
+                .Build();
+
+            // Get the main form from DI container
+            using (host)
+            {
+                var serviceManager = host.Services.GetRequiredService<ServiceManager>();
+                Application.Run(serviceManager);
+            }
+
+            Log.Information("Settings GUI application ended normally");
+        }
+        catch (Exception ex)
+        {
+            Log.Fatal(ex, "Settings GUI application terminated unexpectedly");
+            MessageBox.Show($"A fatal error occurred: {ex.Message}", "Application Error", 
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            Log.CloseAndFlush();
         }
     }
 }

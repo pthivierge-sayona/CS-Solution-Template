@@ -13,77 +13,158 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 #endregion
-using System;
-using log4net;
+
+using Microsoft.Extensions.Logging;
 using Quartz;
-using Quartz.Impl;
-using Quartz.Impl.Triggers;
 
-namespace NewApp.Service.Scheduler
+namespace NewApp.Service.Scheduler;
+
+/// <summary>
+/// Modern async scheduler class using Quartz.NET
+/// for cron configuration
+/// <see cref="https://www.quartz-scheduler.net/documentation/quartz-3.x/tutorial/crontrigger.html"/>
+/// </summary>
+public class CronScheduler
 {
-    /// <summary>
-    /// Scheduler class
-    /// for cron config
-    /// <see cref="http://www.quartz-scheduler.org/documentation/quartz-1.x/tutorials/crontrigger"/>
-    /// </summary>
-    public class CronScheduler
+    private readonly ILogger<CronScheduler> _logger;
+    private readonly ISchedulerFactory _schedulerFactory;
+    private IScheduler? _scheduler;
+
+    public CronScheduler(ILogger<CronScheduler> logger, ISchedulerFactory schedulerFactory)
     {
-        #region Readonly & Static Fields
+        _logger = logger;
+        _schedulerFactory = schedulerFactory;
+    }
 
-        private static readonly ILog Logger = LogManager.GetLogger(typeof (CronTask));
-        private readonly ISchedulerFactory _factory = new StdSchedulerFactory();
-
-        #endregion
-
-        #region Fields
-
-        private IScheduler _sched;
-
-        #endregion
-
-        #region Instance Methods
-
-        public void AddTask(string taskName, string cronConfig, Action action)
+    /// <summary>
+    /// Add a scheduled task with cron expression
+    /// </summary>
+    /// <param name="taskName">Unique name for the task</param>
+    /// <param name="cronExpression">Cron expression (e.g., "0 */5 * * * ?" for every 5 minutes)</param>
+    /// <param name="taskAction">The action to execute</param>
+    public async Task AddTaskAsync(string taskName, string cronExpression, Func<Task> taskAction)
+    {
+        try
         {
-            // get a scheduler
-            _sched = _factory.GetScheduler().Result;
+            _scheduler ??= await _schedulerFactory.GetScheduler();
 
-            // construct job info
-            var task = new CronTask(taskName, cronConfig, action);
+            // Create job detail
+            var jobDetail = JobBuilder.Create<CronJob>()
+                .WithIdentity(taskName, "default")
+                .UsingJobData("taskName", taskName)
+                .Build();
 
+            // Store the task action in a static dictionary for retrieval
+            CronJob.RegisterTaskAction(taskName, taskAction);
 
-            var jobDetail = new JobDetailImpl(task.TaskName, typeof (CronTask));
-            jobDetail.JobDataMap.Put("task", task);
+            // Create trigger with cron schedule
+            var trigger = TriggerBuilder.Create()
+                .WithIdentity($"{taskName}_trigger", "default")
+                .WithCronSchedule(cronExpression)
+                .StartNow()
+                .Build();
 
-            // fire every hour
-            var trigger = new CronTriggerImpl(task.TaskName, "Group1", task.CronConfig);
-
-            _sched.ScheduleJob(jobDetail, trigger);
+            // Schedule the job
+            await _scheduler.ScheduleJob(jobDetail, trigger);
+            
+            _logger.LogInformation("Scheduled task '{TaskName}' with cron expression '{CronExpression}'", 
+                taskName, cronExpression);
         }
-
-        public bool IsStarted()
+        catch (Exception ex)
         {
-            if (_sched != null)
-                return (_sched.IsStarted);
-            return false;
+            _logger.LogError(ex, "Failed to add task '{TaskName}' with cron expression '{CronExpression}'", 
+                taskName, cronExpression);
+            throw;
         }
+    }
 
-
-        public void Start()
+    /// <summary>
+    /// Add a scheduled task with cron expression (synchronous action)
+    /// </summary>
+    /// <param name="taskName">Unique name for the task</param>
+    /// <param name="cronExpression">Cron expression</param>
+    /// <param name="taskAction">The synchronous action to execute</param>
+    public async Task AddTaskAsync(string taskName, string cronExpression, Action taskAction)
+    {
+        await AddTaskAsync(taskName, cronExpression, () =>
         {
-            _sched.Start();
-        }
+            taskAction();
+            return Task.CompletedTask;
+        });
+    }
 
-        public void Stop()
+    /// <summary>
+    /// Check if the scheduler is started
+    /// </summary>
+    public bool IsStarted => _scheduler?.IsStarted ?? false;
+
+    /// <summary>
+    /// Start the scheduler
+    /// </summary>
+    public async Task StartAsync()
+    {
+        try
         {
-            Logger.Debug("Stopping Cron Scheduler...");
-            _sched.Shutdown();
+            _scheduler ??= await _schedulerFactory.GetScheduler();
+            await _scheduler.Start();
+            _logger.LogInformation("Cron Scheduler started successfully");
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to start Cron Scheduler");
+            throw;
+        }
+    }
 
-        #endregion
+    /// <summary>
+    /// Stop the scheduler
+    /// </summary>
+    public async Task StopAsync()
+    {
+        try
+        {
+            if (_scheduler != null)
+            {
+                _logger.LogInformation("Stopping Cron Scheduler...");
+                await _scheduler.Shutdown(waitForJobsToComplete: true);
+                _logger.LogInformation("Cron Scheduler stopped successfully");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error stopping Cron Scheduler");
+            throw;
+        }
+    }
 
-        // _logger pour écrire les logs
-
-        // construct a scheduler factory
+    /// <summary>
+    /// Remove a scheduled task
+    /// </summary>
+    /// <param name="taskName">Name of the task to remove</param>
+    public async Task RemoveTaskAsync(string taskName)
+    {
+        try
+        {
+            if (_scheduler != null)
+            {
+                var jobKey = new JobKey(taskName, "default");
+                var removed = await _scheduler.DeleteJob(jobKey);
+                
+                if (removed)
+                {
+                    CronJob.UnregisterTaskAction(taskName);
+                    _logger.LogInformation("Removed task '{TaskName}'", taskName);
+                }
+                else
+                {
+                    _logger.LogWarning("Task '{TaskName}' was not found", taskName);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to remove task '{TaskName}'", taskName);
+            throw;
+        }
     }
 }

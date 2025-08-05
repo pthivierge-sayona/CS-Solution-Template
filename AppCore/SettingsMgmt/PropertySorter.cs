@@ -29,13 +29,13 @@ namespace NewApp.Core.SettingsMgmt
     {
         #region Methods
 
-        public override bool GetPropertiesSupported(ITypeDescriptorContext context)
+        public override bool GetPropertiesSupported(ITypeDescriptorContext? context)
         {
             return true;
         }
 
-        public override PropertyDescriptorCollection GetProperties(ITypeDescriptorContext context, object value,
-            Attribute[] attributes)
+        public override PropertyDescriptorCollection GetProperties(ITypeDescriptorContext? context, object value,
+            Attribute[]? attributes)
         {
             //
             // This override returns a list of properties in order
@@ -124,8 +124,10 @@ namespace NewApp.Core.SettingsMgmt
             get { return _name; }
         }
 
-        public int CompareTo(object obj)
+        public int CompareTo(object? obj)
         {
+            if (obj == null) return 1;
+            
             //
             // Sort the pair objects by ordering by order value
             // Equal values get the same rank
